@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectMapProps, SharedProject } from "@/types/prototype";
 
 type LeafletNamespace = typeof import("leaflet");
@@ -75,7 +75,7 @@ function buildMarkerIcon(
   }
 ) {
   const fill = options.active ? "#2563eb" : "#ff1d1d";
-  const stroke = options.active ? "#0f172a" : "#000000";
+  const stroke = "#000000";
   const innerFill = "#ffffff";
   const shadowOpacity = options.highlighted || options.active ? 0.35 : 0.22;
 
@@ -109,10 +109,35 @@ export function ProjectMap({
   const lastBoundsSignatureRef = useRef<string>("");
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
+  const [mapReady, setMapReady] = useState(false);
+
   const projectsSignature = useMemo(
     () => projects.map((project) => `${project.id}:${project.lat}:${project.lng}`).join("|"),
     [projects]
   );
+
+  function redrawMarkerIcons() {
+    const map = mapRef.current;
+    const L = LRef.current;
+    if (!map || !L) return;
+
+    const zoom = map.getZoom();
+
+    markersRef.current.forEach(({ marker, project }) => {
+      const isActive = activeProjectId === project.id;
+      const isHighlighted = highlightedIds.includes(project.id);
+
+      marker.setIcon(
+        buildMarkerIcon(L, {
+          active: isActive,
+          highlighted: isHighlighted,
+          size: getPinSize(zoom, mode),
+        })
+      );
+
+      marker.setZIndexOffset(isActive ? 1000 : isHighlighted ? 500 : 0);
+    });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -159,16 +184,20 @@ export function ProjectMap({
       setTimeout(invalidate, 120);
       setTimeout(invalidate, 320);
 
-      if (typeof ResizeObserver !== "undefined") {
+      if (typeof ResizeObserver !== "undefined" && mapElRef.current) {
         resizeObserverRef.current = new ResizeObserver(() => invalidate());
         resizeObserverRef.current.observe(mapElRef.current);
       }
+
+      setMapReady(true);
     }
 
     void boot();
 
     return () => {
       cancelled = true;
+      setMapReady(false);
+
       resizeObserverRef.current?.disconnect();
       resizeObserverRef.current = null;
 
@@ -189,33 +218,13 @@ export function ProjectMap({
     };
   }, [mode]);
 
-  function redrawMarkerIcons() {
-    const map = mapRef.current;
-    const L = LRef.current;
-    if (!map || !L) return;
-
-    const zoom = map.getZoom();
-
-    markersRef.current.forEach(({ marker, project }) => {
-      const isActive = activeProjectId === project.id;
-      const isHighlighted = highlightedIds.includes(project.id);
-      marker.setIcon(
-        buildMarkerIcon(L, {
-          active: isActive,
-          highlighted: isHighlighted,
-          size: getPinSize(zoom, mode),
-        })
-      );
-      marker.setZIndexOffset(isActive ? 1000 : isHighlighted ? 500 : 0);
-    });
-  }
-
   useEffect(() => {
     const map = mapRef.current;
     const L = LRef.current;
-    if (!map || !L) return;
+    if (!mapReady || !map || !L) return;
 
     const currentIds = new Set(projects.map((project) => project.id));
+    const zoom = map.getZoom();
 
     markersRef.current.forEach(({ marker }, projectId) => {
       if (!currentIds.has(projectId)) {
@@ -224,12 +233,11 @@ export function ProjectMap({
       }
     });
 
-    const zoom = map.getZoom();
-
     projects.forEach((project) => {
       const existing = markersRef.current.get(project.id);
       const isActive = activeProjectId === project.id;
       const isHighlighted = highlightedIds.includes(project.id);
+
       const icon = buildMarkerIcon(L, {
         active: isActive,
         highlighted: isHighlighted,
@@ -265,12 +273,12 @@ export function ProjectMap({
     });
 
     redrawMarkerIcons();
-  }, [projects, highlightedIds, activeProjectId, onSelectProject, mode]);
+  }, [mapReady, projects, highlightedIds, activeProjectId, onSelectProject, mode]);
 
   useEffect(() => {
     const map = mapRef.current;
     const L = LRef.current;
-    if (!map || !L) return;
+    if (!mapReady || !map || !L) return;
 
     if (projects.length === 0) {
       map.setView([39.5, -98.35], mode === "mini" ? 3 : 4);
@@ -281,7 +289,9 @@ export function ProjectMap({
     if (lastBoundsSignatureRef.current === signature) return;
     lastBoundsSignatureRef.current = signature;
 
-    const bounds = L.latLngBounds(projects.map((project) => [project.lat, project.lng] as [number, number]));
+    const bounds = L.latLngBounds(
+      projects.map((project) => [project.lat, project.lng] as [number, number])
+    );
 
     if (bounds.isValid()) {
       map.fitBounds(bounds, {
@@ -294,7 +304,7 @@ export function ProjectMap({
 
     requestAnimationFrame(() => map.invalidateSize(false));
     setTimeout(() => map.invalidateSize(false), 100);
-  }, [projectsSignature, projects, mode]);
+  }, [mapReady, projectsSignature, projects, mode]);
 
   return <div ref={mapElRef} className="h-full w-full rounded-3xl" />;
 }
